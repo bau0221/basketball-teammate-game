@@ -11,6 +11,7 @@ import urllib.parse
 import random
 import time
 from io import StringIO
+import unicodedata
 
 # 設置頁面配置
 st.set_page_config(
@@ -138,6 +139,16 @@ def reset_game():
         if key in st.session_state:
             del st.session_state[key]
 
+
+def normalize_name(name: str) -> str:
+    """
+    去除重音符號、轉小寫並去除前後空白
+    例如 "Nurkić" → "nurkic"
+    """
+    nfkd = unicodedata.normalize('NFKD', name)
+    no_marks = ''.join(ch for ch in nfkd if not unicodedata.combining(ch))
+    # **重點：轉小寫**，確保大小寫無關
+    return no_marks.lower().strip()
 # 初始化session state
 if 'game_started' not in st.session_state:
     st.session_state['game_started'] = False
@@ -291,23 +302,22 @@ if st.session_state.get('game_started') and 'answer' in st.session_state:
     if show_hint:
         st.info(f"提示：答案的第一個字母是 '{st.session_state['answer'][0]}'")
     
+    # 在猜測判斷時這樣寫
     if submit_guess and guess:
-        if guess.strip().lower() == st.session_state['answer'].strip().lower():
+        # 正規化
+        user_guess = normalize_name(guess)
+        # 全部共同隊友正規化列表
+        common_norm = [normalize_name(t) for t in st.session_state['common']]
+
+        if user_guess in common_norm:
+            # 猜到任一位共同隊友都算成功
             st.balloons()
-            st.success(f"🎉 恭喜！猜對了，答案就是 **{st.session_state['answer']}**！")
-            
+            st.success(f"🎉 恭喜你！**{guess.strip()}** 也是這三位球員的共同隊友！")
             with st.expander("🔍 查看所有可能的共同隊友"):
-                common_sorted = sorted(st.session_state['common'])
-                for i, teammate in enumerate(common_sorted, 1):
+                for i, teammate in enumerate(sorted(st.session_state['common']), 1):
                     st.write(f"{i}. {teammate}")
-                    
         else:
             st.error("❌ 猜錯囉，再試試看！")
-            
-            # 檢查是否接近正確答案
-            if guess.strip().lower() in [t.lower() for t in st.session_state['common']]:
-                st.warning("🔥 很接近了！這個球員確實是共同隊友，但不是我選的答案。")
-
 # 側邊欄資訊
 with st.sidebar:
     st.header("ℹ️ 遊戲資訊")
