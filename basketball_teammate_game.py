@@ -253,7 +253,7 @@ if st.session_state.get('search_completed'):
             
             # 計算交集
             common = set(t1) & set(t2) & set(t3)
-
+            common = {c for c in common if c.lower() != 'teammate'}
             if not common:
                 st.warning("😔 這三位球員沒有共同隊友，請重新選擇其他球員。")
                 # 顯示兩兩交集來幫助調試
@@ -293,12 +293,15 @@ if st.session_state.get('game_started') and 'answer' in st.session_state:
     
     guess = st.text_input("請猜這位共同隊友的名字：", key="guess_input", placeholder="輸入球員姓名...")
     
-    col1, col2 = st.columns([1, 1])
+    # 三個按鈕：提交／提示／放棄
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col1:
         submit_guess = st.button("✅ 提交答案", type="primary")
     with col2:
-        show_hint = st.button("💡 顯示提示")
-    
+        show_hint   = st.button("💡 顯示提示")
+    with col3:
+        give_up     = st.button("🛑 放棄並顯示答案")
+
     if show_hint:
         st.info(f"提示：答案的第一個字母是 '{st.session_state['answer'][0]}'")
     
@@ -318,6 +321,14 @@ if st.session_state.get('game_started') and 'answer' in st.session_state:
                     st.write(f"{i}. {teammate}")
         else:
             st.error("❌ 猜錯囉，再試試看！")
+
+    if give_up:
+        st.error(f"🤷‍♂️ 放棄啦，隨機答案是 **{st.session_state['answer']}**！")
+        # 顯示所有可能答案
+        with st.expander("🔍 查看所有可能的共同隊友"):
+            for i, teammate in enumerate(sorted(st.session_state['common']), 1):
+                st.write(f"{i}. {teammate}")
+
 # 側邊欄資訊
 with st.sidebar:
     st.header("ℹ️ 遊戲資訊")
