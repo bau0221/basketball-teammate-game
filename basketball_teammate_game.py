@@ -33,32 +33,87 @@ def fetch_all_players() -> list[str]:
     return sorted(active_names)
 
 
-def generate_computer_question(max_trials: int = 20,min_games: int = 20) -> dict | None:
+def generate_computer_question(max_trials: int = 20, min_games: int = 20) -> dict | None:
     """
-    隨機選一位球員 → 抓其隊友 → 隨機挑 3 位隊友作為線索。
-    回傳 {'answer': 原球員姓名, 'clues': [三位隊友]}，若嘗試數達上限仍失敗則回傳 None。
+    1. 隨機選一位球員作為保底答案
+    2. 從他的隊友中隨機選3位作為線索
+    3. 用這3位線索去跑共同隊友邏輯
+    4. 結果一定包含原球員，可能包含其他答案
     """
     all_players = fetch_all_players()
-    rng = random.Random(time.time())          # 避免與 Streamlit 亂數種子衝突
+    rng = random.Random(time.time())
     trials = 0
-
+    
     while trials < max_trials:
         trials += 1
-        cand_name = rng.choice(all_players)
-
-        # 透過原本的 search_player 拿到 Basketball Reference 的 pid
-        search_res = search_player(cand_name)
-        if not search_res:
+        
+        # 步驟1: 隨機選一位球員作為保底答案
+        target_player = rng.choice(all_players)
+        
+        try:
+            # 搜索這位目標球員
+            search_result = search_player(target_player)
+            if not search_result:
+                continue
+            
+            target_info = search_result[0]
+            
+            # 步驟2: 獲取目標球員的隊友，並隨機選3位作為線索
+            target_teammates = fetch_teammates(target_info['pid'], target_info['name'], min_games=min_games)
+            
+            if len(target_teammates) < 3:
+                continue  # 隊友不足3位，跳過
+            
+            # 隨機選3位隊友作為線索
+            clue_players = rng.sample(target_teammates, 3)
+            
+            # 步驟3: 搜索這3位線索球員
+            clue_search_results = []
+            for clue_player in clue_players:
+                result = search_player(clue_player)
+                if not result:
+                    break  # 如果任一線索球員搜不到就跳過這組
+                clue_search_results.append(result[0])
+            
+            if len(clue_search_results) != 3:
+                continue
+            
+            # 步驟4: 獲取3位線索球員的隊友清單
+            clue_teammates_lists = []
+            for result in clue_search_results:
+                teammates = fetch_teammates(result['pid'], result['name'], min_games=min_games)
+                if not teammates:
+                    break
+                clue_teammates_lists.append(teammates)
+            
+            if len(clue_teammates_lists) != 3:
+                continue
+            
+            # 步驟5: 計算交集（共同隊友）
+            common = set(clue_teammates_lists[0]) & set(clue_teammates_lists[1]) & set(clue_teammates_lists[2])
+            common = {c for c in common if c.lower() != 'teammate'}  # 過濾掉無效項目
+            
+            # 驗證：目標球員應該在共同隊友中（因為他跟3位線索都當過隊友）
+            target_normalized = normalize_name(target_player)
+            common_normalized = [normalize_name(c) for c in common]
+            
+            if target_normalized not in common_normalized:
+                # 理論上不應該發生，但如果發生就手動加入
+                common.add(target_player)
+            
+            # 檢查共同隊友數量是否合適
+            if len(common) >= 1:  # 至少有目標球員本人
+                return {
+                    "clues": [result['name'] for result in clue_search_results],  # 三位線索球員
+                    "all_answers": list(common),  # 所有共同隊友作為可能答案
+                    "guaranteed_answer": target_player,  # 保底答案
+                    "answer": target_player  # 用保底答案作為提示答案
+                }
+                
+        except Exception as e:
+            # 如果這組球員處理出錯就繼續下一組
             continue
-        pid = search_res[0]["pid"]            # 取搜尋結果第 1 筆
-
-        teammates = fetch_teammates(pid, cand_name,min_games=min_games)
-        if len(teammates) < 3:
-            continue
-
-        clues = rng.sample(teammates, 3)
-        return {"answer": cand_name, "clues": clues}
-
+    
     return None
 
 
@@ -314,7 +369,7 @@ if mode == "玩家模式":
                     st.session_state['selected_players'] = [sel1['name'], sel2['name'], sel3['name']]
                     st.session_state['game_started'] = True
                     
-                    st.success(f"🎯 找到 {len(common)} 位共同隊友！我已經選好了一位，請開始猜測！")
+                    st.success(f"🎯 找到 {len(common)} 位共同隊友！請開始猜測！")
                     st.balloons()
                     # 強制重新運行以顯示猜測區域
                     st.rerun()
@@ -376,55 +431,113 @@ if mode == "玩家模式":
                     st.write(f"{i}. {teammate}")
 
 # --- 新增／修改開始：電腦模式主要區塊 ------------------------------------
+# 電腦模式主要區塊
 if mode == "電腦模式":
     st.title("🏀 電腦出題：猜猜我是誰？")
-
-    # --- 新增：難易度選擇 ---
+    
+    # 難易度選擇
     difficulty = st.radio(
         "🎚️  選擇難易度",
-        ("簡單", "困難"),             # 也可改成「很簡單 / 很難」等字樣
+        ("簡單", "困難"),
         horizontal=True,
         key="diff_level"
     )
-    # 「簡單」→ 只用 G > 50；「困難」→ 不設門檻
     min_games = 50 if difficulty == "簡單" else 0
-    # --------------------------------
-
+    
     if st.button("🎲 電腦出題", key="start_computer_game", type="primary"):
-        q = generate_computer_question(min_games=min_games)  # ⇦ 把門檻傳進去
+        with st.spinner("正在生成題目，請稍候..."):
+            q = generate_computer_question(min_games=min_games)
+        
         if q is None:
             st.error("目前抓不到合適題目，請稍後再試。")
         else:
-            st.session_state["comp_answer"] = q["answer"]
-            st.session_state["comp_clues"]  = q["clues"]
-            st.session_state["comp_start"]  = True
-            st.success("題目已產生！請開始猜測👇")
-
+            st.session_state["comp_question"] = q
+            st.session_state["comp_start"] = True
+            answer_count = len(q["all_answers"])
+            if answer_count == 1:
+                st.success(f"題目已產生！這組線索只有 1 個答案，請開始猜測👇")
+            else:
+                st.success(f"題目已產生！這組線索有 {answer_count} 個可能答案，請開始猜測👇")
+    
     # 顯示題目
     if st.session_state.get("comp_start"):
-        st.subheader("🔍 線索：以下三位都曾是同一位球員的隊友")
-        st.write("、".join(st.session_state["comp_clues"]))
-
-        guess = st.text_input("請輸入你猜的球員姓名：", key="comp_guess")
-
-        col_ok, col_hint, col_give = st.columns(3)
-        with col_hint:
-            if st.button("💡 顯示提示"):
-                st.info(f"提示：該球員姓名的第一個字母是 **{st.session_state['comp_answer'][0]}**")
-
-        with col_ok:
-            if st.button("✅ 提交答案"):
-                if normalize_name(guess) == normalize_name(st.session_state["comp_answer"]):
-                    st.balloons()
-                    st.success(f"🎉 恭喜答對！答案是 **{st.session_state['comp_answer']}**")
-                    st.session_state["comp_start"] = False
-                else:
-                    st.error("❌ 答錯囉，再試試！")
-
-        with col_give:
-            if st.button("🛑 放棄顯示答案"):
-                st.error(f"答案是 **{st.session_state['comp_answer']}**")
+        q = st.session_state["comp_question"]
+        
+        st.markdown("---")
+        st.subheader("🤔 開始猜測")
+        
+        # 顯示三位線索球員
+        st.write("🔍 **線索：以下三位球員的共同隊友**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.info(f"球員 1: {q['clues'][0]}")
+        with col2:
+            st.info(f"球員 2: {q['clues'][1]}")
+        with col3:
+            st.info(f"球員 3: {q['clues'][2]}")
+        
+        # 顯示可能答案數量提示
+        answer_count = len(q["all_answers"])
+        if answer_count == 1:
+            st.write("💡 提示：這組線索只有唯一答案")
+        else:
+            st.write(f"💡 提示：共有 {answer_count} 位可能的答案")
+        
+        guess = st.text_input("請猜這位共同隊友的名字：", key="comp_guess", placeholder="輸入球員姓名...")
+        
+        # 三個按鈕
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            submit_guess = st.button("✅ 提交答案", type="primary")
+        with col2:
+            show_hint = st.button("💡 顯示提示")
+        with col3:
+            give_up = st.button("🛑 放棄並顯示答案")
+        
+        if show_hint:
+            st.info(f"提示：保底答案的第一個字母是 '{q['guaranteed_answer'][0]}'")
+        
+        if submit_guess and guess:
+            # 正規化用戶輸入
+            user_guess = normalize_name(guess)
+            # 正規化所有可能答案
+            answers_norm = [normalize_name(ans) for ans in q["all_answers"]]
+            
+            if user_guess in answers_norm:
+                # 找出用戶猜中的原始答案名稱
+                matched_answer = next(
+                    ans for ans in q["all_answers"] 
+                    if normalize_name(ans) == user_guess
+                )
+                
+                st.balloons()
+                st.success(f"🎉 恭喜你！**{matched_answer}** 確實是這三位球員的共同隊友！")
+                
+                # 顯示所有可能答案
+                if len(q["all_answers"]) > 1:
+                    with st.expander("🔍 查看所有可能的共同隊友"):
+                        for i, teammate in enumerate(sorted(q["all_answers"]), 1):
+                            if normalize_name(teammate) == user_guess:
+                                st.write(f"{i}. **{teammate}** ← 你的答案")
+                            else:
+                                st.write(f"{i}. {teammate}")
+                
                 st.session_state["comp_start"] = False
+            else:
+                st.error("❌ 猜錯囉，再試試看！")
+        
+        if give_up:
+            if len(q["all_answers"]) == 1:
+                st.error(f"🤷‍♂️ 答案是：**{q['all_answers'][0]}**")
+            else:
+                st.error(f"🤷‍♂️ 所有可能的答案如下：")
+                for i, teammate in enumerate(sorted(q["all_answers"]), 1):
+                    if teammate == q['guaranteed_answer']:
+                        st.write(f"{i}. **{teammate}** ← 保底答案")
+                    else:
+                        st.write(f"{i}. {teammate}")
+            
+            st.session_state["comp_start"] = False
 # --- 新增／修改結束 -------------------------------------------------------
 
 
