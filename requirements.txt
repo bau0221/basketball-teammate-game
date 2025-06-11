@@ -1,5 +1,6 @@
-streamlit
-requests
-beautifulsoup4
 pandas
 lxml
+streamlit>=1.33.0
+nba_api>=1.4.1
+beautifulsoup4>=4.12.3
+requests>=2.31.0
