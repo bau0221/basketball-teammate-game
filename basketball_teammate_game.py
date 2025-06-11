@@ -438,7 +438,7 @@ if mode == "電腦模式":
     # 難易度選擇
     difficulty = st.radio(
         "🎚️  選擇難易度",
-        ("簡單", "困難"),
+        ("簡單(大概率同隊)", "困難"),
         horizontal=True,
         key="diff_level"
     )
